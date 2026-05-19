@@ -1,0 +1,36 @@
+{
+  "name": "mcp-oauth-gateway",
+  "version": "0.1.0",
+  "description": "OAuth gateway for MCP servers — wrap any MCP server with OAuth 2.1 + PKCE + Dynamic Client Registration without modifying the server.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "e2e": "tsx scripts/e2e.ts",
+    "browser-flow": "tsx scripts/browser-flow.ts",
+    "mock-upstream": "tsx scripts/mock-upstream.ts",
+    "full-e2e": "tsx scripts/full-e2e.ts"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "@hono/node-server": "^1.13.0",
+    "better-sqlite3": "^12.6.2",
+    "nanoid": "^5.0.9",
+    "zod": "^4.3.6",
+    "dotenv": "^17.3.1",
+    "jose": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.0"
+  }
+}
