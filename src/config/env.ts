@@ -20,6 +20,7 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
   VAULT_KEY_FILE: z.string().default("./data/vault.key"),
+  CONNECT_ADMIN_TOKEN_FILE: z.string().default("./data/connect-admin.token"),
 });
 
 export type Env = z.infer<typeof envSchema>;

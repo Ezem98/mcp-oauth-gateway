@@ -10,14 +10,19 @@ describe("Google OAuth connect and callback", () => {
   let getDb: any;
   let GOOGLE_SCOPES: string[];
   let sharedState: string;
+  let adminToken: string;
 
   beforeAll(async () => {
     tempDir = await mkdtemp(join(os.tmpdir(), "mcp-google-test-"));
     process.env.DB_PATH = join(tempDir, "test.db");
     process.env.VAULT_KEY_FILE = join(tempDir, "vault.key");
+    process.env.CONNECT_ADMIN_TOKEN_FILE = join(tempDir, "connect-admin.token");
     process.env.GOOGLE_CLIENT_ID = "fake-client-id";
     process.env.GOOGLE_CLIENT_SECRET = "fake-client-secret";
     process.env.GOOGLE_REDIRECT_URI = "http://localhost:4000/connect/google/callback";
+
+    const adminTokenMod = await import("../src/credentials/admin-token.js");
+    adminToken = adminTokenMod.getConnectAdminToken();
 
     const googleMod = await import("../src/credentials/google.js");
     GOOGLE_SCOPES = googleMod.GOOGLE_SCOPES;
@@ -41,8 +46,32 @@ describe("Google OAuth connect and callback", () => {
     vi.unstubAllGlobals();
   });
 
-  it("(b) GET /connect/google?user=u1 redirects with all required query parameters", async () => {
+  it("GET /connect/google without admin param → 401", async () => {
     const res = await connectRoutes.request("/connect/google?user=u1");
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "unauthorized",
+      error_description: "valid admin token required",
+    });
+  });
+
+  it("GET /connect/google with wrong admin token → 401", async () => {
+    const res = await connectRoutes.request(
+      "/connect/google?user=u1&admin=wrong-token"
+    );
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "unauthorized",
+      error_description: "valid admin token required",
+    });
+  });
+
+  it("(b) GET /connect/google?user=u1 redirects with all required query parameters", async () => {
+    const res = await connectRoutes.request(
+      `/connect/google?user=u1&admin=${adminToken}`
+    );
     expect(res.status).toBe(302);
 
     const location = res.headers.get("location");
@@ -68,7 +97,9 @@ describe("Google OAuth connect and callback", () => {
   });
 
   it("(c) full callback exchanges code, saves credential encrypted, and renders HTML with missing scope warning", async () => {
-    const initRes = await connectRoutes.request("/connect/google?user=u1");
+    const initRes = await connectRoutes.request(
+      `/connect/google?user=u1&admin=${adminToken}`
+    );
     expect(initRes.status).toBe(302);
     const redirectUrl = new URL(initRes.headers.get("location")!);
     sharedState = redirectUrl.searchParams.get("state")!;
@@ -142,7 +173,9 @@ describe("Google OAuth connect and callback", () => {
   });
 
   it("(f) token endpoint returning 400 {error:\"invalid_grant\"} → 502 for a fresh state", async () => {
-    const startRes = await connectRoutes.request("/connect/google?user=u2");
+    const startRes = await connectRoutes.request(
+      `/connect/google?user=u2&admin=${adminToken}`
+    );
     expect(startRes.status).toBe(302);
     const startUrl = new URL(startRes.headers.get("location")!);
     const freshState = startUrl.searchParams.get("state")!;

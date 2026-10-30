@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { getEnv } from "./config/env.js";
 import { connectRoutes } from "./credentials/connect-route.js";
+import { getConnectAdminToken } from "./credentials/admin-token.js";
 import { getVaultKey } from "./credentials/crypto.js";
 import { credentialsRoutes } from "./credentials/route.js";
 import { getDb, seedDemoServer } from "./db/client.js";
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
 
   // Load (or create) the vault key up front so a bad key file fails at boot.
   getVaultKey();
+  getConnectAdminToken();
 
   // Materialize the active signing keypair (generates on first run).
   await getActiveSigningKey();

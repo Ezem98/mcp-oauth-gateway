@@ -12,6 +12,7 @@
     "start": "tsx src/server.ts",
     "build": "tsc",
     "test": "vitest run --passWithNoTests",
+    "connect-url": "tsx scripts/connect-url.ts",
     "e2e": "tsx scripts/e2e.ts",
     "browser-flow": "tsx scripts/browser-flow.ts",
     "mock-upstream": "tsx scripts/mock-upstream.ts",

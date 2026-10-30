@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { logger } from "../observability/logger.js";
+import { isValidAdminToken } from "./admin-token.js";
 import {
   buildGoogleAuthUrl,
   exchangeGoogleCode,
@@ -32,6 +33,17 @@ connectRoutes.get("/connect/google", (c) => {
   const cfg = getGoogleConfig();
   if (!cfg) {
     return c.json({ error: "google_not_configured" }, 503);
+  }
+
+  const admin = c.req.query("admin");
+  if (!admin || !isValidAdminToken(admin)) {
+    return c.json(
+      {
+        error: "unauthorized",
+        error_description: "valid admin token required",
+      },
+      401
+    );
   }
 
   const user = c.req.query("user");
