@@ -8,6 +8,14 @@ export function truncate(
   return { text: text.slice(0, max), truncated: true };
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  aacute: "á", eacute: "é", iacute: "í", oacute: "ó", uacute: "ú",
+  Aacute: "Á", Eacute: "É", Iacute: "Í", Oacute: "Ó", Uacute: "Ú",
+  ntilde: "ñ", Ntilde: "Ñ", uuml: "ü", Uuml: "Ü",
+  iexcl: "¡", iquest: "¿", apos: "'", euro: "€",
+  laquo: "«", raquo: "»", ndash: "–", mdash: "—", hellip: "…",
+};
+
 export function stripHtml(html: string): string {
   // Drop <script> and <style> blocks (including multiline and attributes)
   let text = html
@@ -20,6 +28,13 @@ export function stripHtml(html: string): string {
 
   // Remove all other HTML tags
   text = text.replace(/<[^>]+>/g, "");
+
+  // Named entities common in Spanish mail (&aacute; &ntilde; ...). &amp; is
+  // left for the pass below so "&amp;aacute;" isn't double-decoded.
+  text = text.replace(
+    /&([a-zA-Z]+);/g,
+    (match, name: string) => NAMED_ENTITIES[name] ?? match
+  );
 
   // Decode &amp; &lt; &gt; &quot; &#39; &nbsp; and numeric entities (&#NNN; / &#xHH;)
   text = text.replace(
