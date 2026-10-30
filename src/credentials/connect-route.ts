@@ -108,9 +108,17 @@ connectRoutes.get("/connect/google/callback", async (c) => {
   } catch (err) {
     const status =
       err instanceof GoogleExchangeError ? err.status : "unknown";
-    logger.error("Failed to exchange Google code", { status });
+    // Google's `error` field (invalid_client, invalid_grant,
+    // redirect_uri_mismatch...) is an error code, not a secret, and it is the
+    // only way to tell those failures apart.
+    const googleError =
+      err instanceof GoogleExchangeError ? err.googleError : "network_or_parse_error";
+    logger.error("Failed to exchange Google code", {
+      status,
+      google_error: googleError,
+    });
     return c.html(
-      `<!DOCTYPE html><html><body><h1>Error de conexión</h1><p>No se pudo conectar con el proveedor de autenticación.</p></body></html>`,
+      `<!DOCTYPE html><html><body><h1>Error de conexión</h1><p>No se pudo conectar con el proveedor de autenticación.</p><p>Código de Google: <code>${escapeHtml(googleError)}</code></p></body></html>`,
       502
     );
   }
