@@ -38,11 +38,11 @@ Clonar el repositorio en `/opt/mcp-oauth-gateway`, asignar permisos al usuario `
 sudo git clone https://github.com/Ezem98/mcp-oauth-gateway /opt/mcp-oauth-gateway
 cd /opt/mcp-oauth-gateway
 
-# Mientras todo esto viva en la rama jarvis (hay que pushearla antes):
-sudo git checkout jarvis
 
 sudo chown -R mcpgw:mcpgw /opt/mcp-oauth-gateway
-sudo -u mcpgw npm ci --omit=dev
+# mcpgw no tiene home: la caché de npm va a /tmp y se borra después
+sudo -u mcpgw env npm_config_cache=/tmp/mcpgw-npm-cache npm ci --omit=dev
+sudo rm -rf /tmp/mcpgw-npm-cache
 sudo -u mcpgw mkdir -p /opt/mcp-oauth-gateway/data
 sudo -u mcpgw chmod 700 /opt/mcp-oauth-gateway/data
 ```
@@ -353,8 +353,10 @@ Para actualizar la aplicación a una versión más reciente:
 
 ```bash
 cd /opt/mcp-oauth-gateway
-sudo -u mcpgw git pull
-sudo -u mcpgw npm ci --omit=dev
+sudo -u mcpgw git pull --ff-only
+# mcpgw no tiene home: la caché de npm va a /tmp y se borra después
+sudo -u mcpgw env npm_config_cache=/tmp/mcpgw-npm-cache npm ci --omit=dev
+sudo rm -rf /tmp/mcpgw-npm-cache
 sudo systemctl restart google-mcp mcp-gateway
 ```
 
