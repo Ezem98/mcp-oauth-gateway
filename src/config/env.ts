@@ -5,6 +5,7 @@ if (!process.env.VITEST) config({ override: true });
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
+  LISTEN_HOST: z.string().default("127.0.0.1"),
   PUBLIC_URL: z.string().url().default("http://localhost:4000"),
   DB_PATH: z.string().default("./data/gateway.db"),
   JWT_PRIVATE_KEY: z.string().optional(),

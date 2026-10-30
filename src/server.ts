@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   const app = buildApp();
 
   serve(
-    { fetch: app.fetch, port: env.PORT },
+    { fetch: app.fetch, port: env.PORT, hostname: env.LISTEN_HOST },
     () => {
       logger.info(`HTTP listening`, { url: env.PUBLIC_URL });
       logger.info("Endpoints:");

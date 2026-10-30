@@ -21,6 +21,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { queryAudit } from "../src/audit/audit.js";
 import { getEnv } from "../src/config/env.js";
+import { getConnectAdminToken } from "../src/credentials/admin-token.js";
 import {
   updateCredentialMetadata,
   upsertCredential,
@@ -395,6 +396,7 @@ async function main(): Promise<void> {
     // Auto-approve via POST
     const form = new URLSearchParams(authParams);
     form.set("decision", "approve");
+    form.set("admin_token", getConnectAdminToken());
     const authPost = await fetch(disco.authorization_endpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },

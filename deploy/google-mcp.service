@@ -1,0 +1,57 @@
+[Unit]
+Description=Google MCP Upstream Server (Gmail + Drive)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcpgw
+Group=mcpgw
+WorkingDirectory=/opt/mcp-oauth-gateway
+EnvironmentFile=/etc/mcp-gateway/env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node --import tsx upstreams/google/server.ts
+Restart=on-failure
+RestartSec=5
+
+# Máscara restrictiva para creación de archivos (0077 = solo lectura/escritura para el usuario mcpgw)
+UMask=0077
+
+# No requiere rutas con permiso de escritura (servicio sin estado en disco)
+
+# --- Directivas de aislamiento y seguridad (Hardening) ---
+# Impide que el proceso o sus hijos eleven privilegios (ej. mediante binarios SUID)
+NoNewPrivileges=true
+
+# Monta todo el sistema de archivos (/usr, /boot, /etc, etc.) en modo de solo lectura estricto
+ProtectSystem=strict
+
+# Hace inaccesibles los directorios de usuario (/home, /root y /run/user)
+ProtectHome=true
+
+# Asigna un directorio /tmp y /var/tmp privado y aislado del resto de procesos del sistema
+PrivateTmp=true
+
+# Deniega el acceso a dispositivos de hardware físico (/dev), permitiendo solo pseudo-dispositivos básicos
+PrivateDevices=true
+
+# Bloquea la modificación de variables del kernel en tiempo de ejecución (/proc/sys, /sys, etc.)
+ProtectKernelTunables=true
+
+# Impide la carga o descarga explícita de módulos del kernel
+ProtectKernelModules=true
+
+# Hace que los controladores de cgroups en /sys/fs/cgroup sean de solo lectura
+ProtectControlGroups=true
+
+# Bloquea intentos de crear o ejecutar archivos con banderas SUID o SGID
+RestrictSUIDSGID=true
+
+# Bloquea cambios en la personalidad de ejecución del sistema operativo (sys_personality)
+LockPersonality=true
+
+# Limita el acceso a sockets de red exclusivamente a IPv4, IPv6 y sockets Unix locales
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

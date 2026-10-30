@@ -22,6 +22,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { getEnv } from "../src/config/env.js";
+import { getConnectAdminToken } from "../src/credentials/admin-token.js";
 import { upsertCredential } from "../src/credentials/vault.js";
 import { upsertPolicies } from "../src/policies/policies.js";
 
@@ -180,6 +181,7 @@ async function main() {
   // Auto-approve via POST
   const form = new URLSearchParams(authParams);
   form.set("decision", "approve");
+  form.set("admin_token", getConnectAdminToken());
   const authPost = await fetch(disco.authorization_endpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
