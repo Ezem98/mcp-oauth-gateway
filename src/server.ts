@@ -1,7 +1,8 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { getEnv } from "./config/env.js";
-import { seedDemoCredentials } from "./credentials/vault.js";
+import { connectRoutes } from "./credentials/connect-route.js";
+import { getVaultKey } from "./credentials/crypto.js";
 import { credentialsRoutes } from "./credentials/route.js";
 import { getDb, seedDemoServer } from "./db/client.js";
 import { gatewayRoutes } from "./gateway/route.js";
@@ -21,6 +22,7 @@ function buildApp(): Hono {
 
   app.route("/", oauthRoutes);
   app.route("/", credentialsRoutes);
+  app.route("/", connectRoutes);
   app.route("/", gatewayRoutes);
 
   app.notFound((c) => c.json({ error: "not_found", path: c.req.path }, 404));
@@ -38,7 +40,9 @@ async function main(): Promise<void> {
   // Initialize DB + seed demo server config from env.
   getDb();
   seedDemoServer();
-  seedDemoCredentials(env.AUTH_DEFAULT_USER);
+
+  // Load (or create) the vault key up front so a bad key file fails at boot.
+  getVaultKey();
 
   // Materialize the active signing keypair (generates on first run).
   await getActiveSigningKey();
@@ -59,6 +63,8 @@ async function main(): Promise<void> {
       logger.info("  POST /token");
       logger.info("  GET  /.well-known/oauth-protected-resource/:server_id/mcp");
       logger.info("  GET  /:server_id/credentials/:provider/token (outbound vending, auth required)");
+      logger.info("  GET  /connect/google");
+      logger.info("  GET  /connect/google/callback");
       logger.info("  ANY  /:server_id/mcp                       (proxied, auth required)");
     }
   );

@@ -104,3 +104,16 @@ CREATE TABLE IF NOT EXISTS credential_vault (
 );
 CREATE INDEX IF NOT EXISTS idx_credential_vault_user_provider
   ON credential_vault(user_subject, provider);
+
+-- Outbound OAuth state tokens pending authorization callback (PKCE)
+CREATE TABLE IF NOT EXISTS outbound_oauth_states (
+  state TEXT PRIMARY KEY,
+  user_subject TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  code_verifier TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_oauth_states_expires_at
+  ON outbound_oauth_states(expires_at);

@@ -15,9 +15,14 @@
  *  3. Full OAuth: discovery → DCR → /authorize approve → /token.
  *  4. Authenticated `initialize`, `tools/list`, `tools/call:echo`,
  *     `tools/call:whoami` all succeed and the upstream sees the right user.
+ *
+ * Note: The script seeds its own stub Google credential into the gateway DB
+ * before running outbound credential vending steps [8] and [9].
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { getEnv } from "../src/config/env.js";
+import { upsertCredential } from "../src/credentials/vault.js";
 
 const GATEWAY = process.env.GATEWAY ?? "http://localhost:4000";
 const SERVER_ID = process.env.SERVER_ID ?? "memory-demo";
@@ -201,6 +206,19 @@ async function main() {
   );
   const accessToken = tok.access_token as string;
   console.log(`\n▶ Got access token. Proceeding to authenticated MCP calls.`);
+
+  const env = getEnv();
+  upsertCredential({
+    user_subject: env.AUTH_DEFAULT_USER,
+    provider: "google",
+    credential_type: "oauth2",
+    access_token: `e2e-stub-google-token-${randomBytes(8).toString("hex")}`,
+    refresh_token: null,
+    scope: "https://www.googleapis.com/auth/gmail.send",
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    metadata: { stub: true, note: "seeded by full-e2e" },
+  });
+  console.log("▶ Seeded e2e stub Google credential");
 
   await step("[3] Authenticated initialize", async () => {
     const result = await rpc(

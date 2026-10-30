@@ -1,7 +1,7 @@
 import { config } from "dotenv";
 import { z } from "zod";
 
-config({ override: true });
+if (!process.env.VITEST) config({ override: true });
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
@@ -16,6 +16,10 @@ const envSchema = z.object({
     .default("http://localhost:5001/mcp"),
   DEMO_SERVER_UPSTREAM_AUTH_HEADER: z.string().optional(),
   AUTH_DEFAULT_USER: z.string().default("demo-user@local"),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z.string().url().optional(),
+  VAULT_KEY_FILE: z.string().default("./data/vault.key"),
 });
 
 export type Env = z.infer<typeof envSchema>;
