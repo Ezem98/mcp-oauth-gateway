@@ -37,6 +37,27 @@ export interface GmailSearchResult {
   snippet: string;
 }
 
+async function mapConcurrent<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const i = nextIndex++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 export async function gmailSearch(
   api: GmailApiContext,
   args: GmailSearchArgs
@@ -57,38 +78,36 @@ export async function gmailSearch(
     return [];
   }
 
-  const results = await Promise.all(
-    data.messages.map(async (msg) => {
-      const msgUrl = new URL(
-        `${base}/gmail/v1/users/me/messages/${encodeURIComponent(msg.id)}`
-      );
-      msgUrl.searchParams.set("format", "metadata");
-      msgUrl.searchParams.append("metadataHeaders", "From");
-      msgUrl.searchParams.append("metadataHeaders", "To");
-      msgUrl.searchParams.append("metadataHeaders", "Subject");
-      msgUrl.searchParams.append("metadataHeaders", "Date");
+  const results = await mapConcurrent(data.messages, 5, async (msg) => {
+    const msgUrl = new URL(
+      `${base}/gmail/v1/users/me/messages/${encodeURIComponent(msg.id)}`
+    );
+    msgUrl.searchParams.set("format", "metadata");
+    msgUrl.searchParams.append("metadataHeaders", "From");
+    msgUrl.searchParams.append("metadataHeaders", "To");
+    msgUrl.searchParams.append("metadataHeaders", "Subject");
+    msgUrl.searchParams.append("metadataHeaders", "Date");
 
-      const itemRes = await googleFetch(msgUrl.toString(), api.token);
-      const itemData = (await itemRes.json()) as {
-        id: string;
-        threadId: string;
-        snippet?: string;
-        payload?: {
-          headers?: GmailHeader[];
-        };
+    const itemRes = await googleFetch(msgUrl.toString(), api.token);
+    const itemData = (await itemRes.json()) as {
+      id: string;
+      threadId: string;
+      snippet?: string;
+      payload?: {
+        headers?: GmailHeader[];
       };
+    };
 
-      return {
-        id: itemData.id,
-        threadId: itemData.threadId,
-        from: getHeader(itemData.payload?.headers, "from"),
-        to: getHeader(itemData.payload?.headers, "to"),
-        subject: getHeader(itemData.payload?.headers, "subject"),
-        date: getHeader(itemData.payload?.headers, "date"),
-        snippet: itemData.snippet ?? "",
-      };
-    })
-  );
+    return {
+      id: itemData.id,
+      threadId: itemData.threadId,
+      from: getHeader(itemData.payload?.headers, "from"),
+      to: getHeader(itemData.payload?.headers, "to"),
+      subject: getHeader(itemData.payload?.headers, "subject"),
+      date: getHeader(itemData.payload?.headers, "date"),
+      snippet: itemData.snippet ?? "",
+    };
+  });
 
   return results;
 }

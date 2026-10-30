@@ -117,3 +117,12 @@ CREATE TABLE IF NOT EXISTS outbound_oauth_states (
 );
 CREATE INDEX IF NOT EXISTS idx_outbound_oauth_states_expires_at
   ON outbound_oauth_states(expires_at);
+
+-- Tool allow/deny policies per MCP server
+CREATE TABLE IF NOT EXISTS tool_policies (
+  server_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (server_id, tool_name)
+);

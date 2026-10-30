@@ -16,6 +16,7 @@ const envSchema = z.object({
     .default("http://localhost:5001/mcp"),
   DEMO_SERVER_UPSTREAM_AUTH_HEADER: z.string().optional(),
   SERVERS_FILE: z.string().optional(),
+  POLICIES_FILE: z.string().optional(),
   AUTH_DEFAULT_USER: z.string().default("demo-user@local"),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),

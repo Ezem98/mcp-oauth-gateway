@@ -12,7 +12,7 @@
  *  2. Starts an in-process Google MCP upstream on 127.0.0.1:5002 with a random 64-hex shared secret.
  *  3. Seeds server 'google-e2e' and a stub Google credential into the gateway DB.
  *  4. Executes the OAuth 2.1 authorization code flow with PKCE against the gateway.
- *  5. Runs all 9 end-to-end steps through the gateway with Bearer authentication.
+ *  5. Runs all 10 end-to-end steps through the gateway with Bearer authentication.
  *  6. Cleans up in-process servers and restores the credential in the gateway database.
  */
 
@@ -25,6 +25,7 @@ import {
   upsertCredential,
 } from "../src/credentials/vault.js";
 import { upsertServers } from "../src/db/servers-file.js";
+import { upsertPolicies } from "../src/policies/policies.js";
 import { createGoogleMcpApp } from "../upstreams/google/app.js";
 
 const GATEWAY = process.env.GATEWAY ?? "http://localhost:4000";
@@ -336,6 +337,16 @@ async function main(): Promise<void> {
       metadata: { stub: true, note: "seeded by google-e2e" },
     });
 
+    upsertPolicies({
+      [SERVER_ID]: {
+        gmail_search: "allow",
+        gmail_read: "allow",
+        gmail_create_draft: "allow",
+        drive_search: "allow",
+        drive_read: "allow",
+      },
+    });
+
     // ─── Step [1] Direct POST without secret → 401 ────────────────────────────
     await step(
       "[1] direct POST to http://127.0.0.1:5002/mcp without the secret → 401 (nobody can bypass the gateway)",
@@ -584,9 +595,87 @@ async function main(): Promise<void> {
       }
     );
 
-    // ─── Step [9] updateCredentialMetadata & restore ──────────────────────────
+    // ─── Step [9] Policy enforcement: deny gmail_create_draft ───────────────
     await step(
-      "[9] updateCredentialMetadata(user, 'google', { needs_reconnect: true }) → tools/call returns isError with text starting 'Hay que reconectar la cuenta de Google:'; then restore credential",
+      "[9] set gmail_create_draft to 'deny' → tools/list omits it, tools/call returns -32001 with no upstream call, then restore to 'allow'",
+      async () => {
+        const countBefore = recordedRequests.length;
+        upsertPolicies({
+          [SERVER_ID]: {
+            gmail_create_draft: "deny",
+          },
+        });
+
+        try {
+          // Verify tools/list omits gmail_create_draft
+          const listResult = await rpc("tools/list", undefined, accessToken);
+          assert(Array.isArray(listResult.tools), "tools must be an array");
+          const toolNames = listResult.tools.map((t: any) => t.name);
+          assert(
+            !toolNames.includes("gmail_create_draft"),
+            `expected tools/list to omit gmail_create_draft, got: ${toolNames.join(", ")}`
+          );
+          assert(
+            toolNames.length === 4,
+            `expected 4 tools, got ${toolNames.length}`
+          );
+
+          // Verify tools/call returns JSON-RPC error -32001
+          const callId = ++rpcId;
+          const callRes = await fetch(MCP_URL, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: callId,
+              method: "tools/call",
+              params: {
+                name: "gmail_create_draft",
+                arguments: {
+                  to: "destinatario@example.com",
+                  subject: "Denied draft",
+                  body: "This should be blocked.",
+                },
+              },
+            }),
+          });
+
+          assert(callRes.status === 200, `expected 200, got ${callRes.status}`);
+          const callPayload = (await callRes.json()) as any;
+          assert(callPayload.jsonrpc === "2.0", "bad jsonrpc envelope");
+          assert(callPayload.id === callId, "id mismatch");
+          assert(callPayload.error, "expected JSON-RPC error");
+          assert(
+            callPayload.error.code === -32001,
+            `expected error code -32001, got ${callPayload.error.code}`
+          );
+          assert(
+            callPayload.error.message.includes("gmail_create_draft"),
+            `expected message to contain tool name, got ${callPayload.error.message}`
+          );
+
+          // Verify fake Google API received no new request
+          assert(
+            recordedRequests.length === countBefore,
+            `fake Google API received requests while blocked: expected ${countBefore}, got ${recordedRequests.length}`
+          );
+        } finally {
+          // Restore to allow
+          upsertPolicies({
+            [SERVER_ID]: {
+              gmail_create_draft: "allow",
+            },
+          });
+        }
+      }
+    );
+
+    // ─── Step [10] updateCredentialMetadata & restore ─────────────────────────
+    await step(
+      "[10] updateCredentialMetadata(user, 'google', { needs_reconnect: true }) → tools/call returns isError with text starting 'Hay que reconectar la cuenta de Google:'; then restore credential",
       async () => {
         updateCredentialMetadata(user, "google", { needs_reconnect: true });
 

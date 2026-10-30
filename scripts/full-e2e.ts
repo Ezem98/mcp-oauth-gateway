@@ -23,6 +23,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { getEnv } from "../src/config/env.js";
 import { upsertCredential } from "../src/credentials/vault.js";
+import { upsertPolicies } from "../src/policies/policies.js";
 
 const GATEWAY = process.env.GATEWAY ?? "http://localhost:4000";
 const SERVER_ID = process.env.SERVER_ID ?? "memory-demo";
@@ -219,6 +220,15 @@ async function main() {
     metadata: { stub: true, note: "seeded by full-e2e" },
   });
   console.log("▶ Seeded e2e stub Google credential");
+
+  upsertPolicies({
+    [SERVER_ID]: {
+      echo: "allow",
+      whoami: "allow",
+      send_gmail_via_gateway: "allow",
+    },
+  });
+  console.log("▶ Seeded e2e tool policies");
 
   await step("[3] Authenticated initialize", async () => {
     const result = await rpc(
