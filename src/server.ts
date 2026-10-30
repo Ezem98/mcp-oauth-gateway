@@ -6,6 +6,7 @@ import { getConnectAdminToken } from "./credentials/admin-token.js";
 import { getVaultKey } from "./credentials/crypto.js";
 import { credentialsRoutes } from "./credentials/route.js";
 import { getDb, seedDemoServer } from "./db/client.js";
+import { seedServersFromFile } from "./db/servers-file.js";
 import { gatewayRoutes } from "./gateway/route.js";
 import { getActiveSigningKey } from "./oauth/keys.js";
 import { oauthRoutes } from "./oauth/router.js";
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
   // Initialize DB + seed demo server config from env.
   getDb();
   seedDemoServer();
+  seedServersFromFile();
 
   // Load (or create) the vault key up front so a bad key file fails at boot.
   getVaultKey();
