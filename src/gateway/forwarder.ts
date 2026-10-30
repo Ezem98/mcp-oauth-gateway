@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { recordAudit, summarizeArgs } from "../audit/audit.js";
 import { getEnv } from "../config/env.js";
 import { getServer } from "../oauth/servers.js";
 import { logger } from "../observability/logger.js";
@@ -6,8 +7,11 @@ import { getToolDecision } from "../policies/policies.js";
 import {
   createSseFilter,
   filterJsonBody,
+  findEventBoundary,
   mergeBlockedJson,
+  parseSseEventData,
   planRequest,
+  type ForwardedToolCall,
   type RequestPlan,
 } from "./policy-filter.js";
 
@@ -161,6 +165,17 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
         tool: blocked.tool,
         sub: auth.claims.sub,
       });
+      recordAudit({
+        user_subject: auth.claims.sub,
+        client_id: auth.claims.client_id,
+        server_id: serverId,
+        kind: "policy_block",
+        tool_name: blocked.tool,
+        args_summary: summarizeArgs(blocked.tool, blocked.args),
+        outcome: "blocked",
+        status: null,
+        duration_ms: 0,
+      });
     }
 
     // Nothing left to forward: answer the blocked calls ourselves.
@@ -201,6 +216,22 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
       upstream: upstreamUrl,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (plan && plan.forwardedCalls.length > 0) {
+      const duration = Date.now() - t0;
+      for (const call of plan.forwardedCalls) {
+        recordAudit({
+          user_subject: auth.claims.sub,
+          client_id: auth.claims.client_id,
+          server_id: serverId,
+          kind: "tool_call",
+          tool_name: call.tool,
+          args_summary: summarizeArgs(call.tool, call.args),
+          outcome: "error",
+          status: 502,
+          duration_ms: duration,
+        });
+      }
+    }
     return c.json(
       { error: "bad_gateway", error_description: "upstream unreachable" },
       502
@@ -226,13 +257,29 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
   });
 
   if (method === "POST" && plan) {
+    const auditResponse = (res: Response): Response => {
+      return wrapResponseWithAudit(
+        res,
+        plan.forwardedCalls,
+        {
+          sub: auth.claims.sub,
+          client_id: auth.claims.client_id,
+          serverId,
+        },
+        t0,
+        upstreamRes.status
+      );
+    };
+
     // Nothing to filter or merge: stream straight through (keeps SSE live).
     if (plan.toolsListIds.size === 0 && plan.blockedResponses.length === 0) {
-      return new Response(upstreamRes.body, {
-        status: upstreamRes.status,
-        statusText: upstreamRes.statusText,
-        headers: respHeaders,
-      });
+      return auditResponse(
+        new Response(upstreamRes.body, {
+          status: upstreamRes.status,
+          statusText: upstreamRes.statusText,
+          headers: respHeaders,
+        })
+      );
     }
 
     // A batch whose forwarded part was only notifications gets an empty 202
@@ -243,7 +290,7 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
       !contentType.toLowerCase().includes("text/event-stream")
     ) {
       await upstreamRes.body?.cancel();
-      return c.json(plan.blockedResponses, 200);
+      return auditResponse(c.json(plan.blockedResponses, 200));
     }
 
     if (contentType.toLowerCase().includes("application/json")) {
@@ -258,11 +305,13 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
       respHeaders.delete("content-length");
       respHeaders.delete("content-encoding");
 
-      return new Response(mergedText, {
-        status: upstreamRes.status,
-        statusText: upstreamRes.statusText,
-        headers: respHeaders,
-      });
+      return auditResponse(
+        new Response(mergedText, {
+          status: upstreamRes.status,
+          statusText: upstreamRes.statusText,
+          headers: respHeaders,
+        })
+      );
     }
 
     if (contentType.toLowerCase().includes("text/event-stream")) {
@@ -276,25 +325,31 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
         );
         const filteredStream = upstreamRes.body.pipeThrough(sseFilter);
 
-        return new Response(filteredStream, {
+        return auditResponse(
+          new Response(filteredStream, {
+            status: upstreamRes.status,
+            statusText: upstreamRes.statusText,
+            headers: respHeaders,
+          })
+        );
+      }
+
+      return auditResponse(
+        new Response(null, {
           status: upstreamRes.status,
           statusText: upstreamRes.statusText,
           headers: respHeaders,
-        });
-      }
+        })
+      );
+    }
 
-      return new Response(null, {
+    return auditResponse(
+      new Response(upstreamRes.body, {
         status: upstreamRes.status,
         statusText: upstreamRes.statusText,
         headers: respHeaders,
-      });
-    }
-
-    return new Response(upstreamRes.body, {
-      status: upstreamRes.status,
-      statusText: upstreamRes.statusText,
-      headers: respHeaders,
-    });
+      })
+    );
   }
 
   // Stream the body through. For SSE this is critical — buffering would defeat
@@ -303,5 +358,216 @@ export async function forwardToUpstream(c: Context): Promise<Response> {
     status: upstreamRes.status,
     statusText: upstreamRes.statusText,
     headers: respHeaders,
+  });
+}
+
+function wrapResponseWithAudit(
+  response: Response,
+  forwardedCalls: ForwardedToolCall[],
+  auth: { sub: string; client_id: string; serverId: string },
+  t0: number,
+  upstreamStatus: number
+): Response {
+  if (forwardedCalls.length === 0) {
+    return response;
+  }
+
+  if (!response.body) {
+    const duration = Date.now() - t0;
+    for (const call of forwardedCalls) {
+      recordAudit({
+        user_subject: auth.sub,
+        client_id: auth.client_id,
+        server_id: auth.serverId,
+        kind: "tool_call",
+        tool_name: call.tool,
+        args_summary: summarizeArgs(call.tool, call.args),
+        outcome: "error",
+        status: upstreamStatus,
+        duration_ms: duration,
+      });
+    }
+    return response;
+  }
+
+  const [clientStream, auditStream] = response.body.tee();
+  const contentType = response.headers.get("content-type") ?? "";
+
+  consumeAuditStream(
+    auditStream,
+    contentType,
+    forwardedCalls,
+    auth,
+    t0,
+    upstreamStatus
+  );
+
+  return new Response(clientStream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function consumeAuditStream(
+  auditStream: ReadableStream<Uint8Array>,
+  contentType: string,
+  forwardedCalls: ForwardedToolCall[],
+  auth: { sub: string; client_id: string; serverId: string },
+  t0: number,
+  upstreamStatus: number
+): void {
+  (async () => {
+    const pending = new Map<string | number, ForwardedToolCall>();
+    const unkeyed: ForwardedToolCall[] = [];
+
+    for (const call of forwardedCalls) {
+      if (call.id !== undefined && call.id !== null) {
+        pending.set(call.id, call);
+      } else {
+        unkeyed.push(call);
+      }
+    }
+
+    const recordCall = (
+      call: ForwardedToolCall,
+      resp?: { result?: unknown; error?: unknown }
+    ) => {
+      const duration_ms = Date.now() - t0;
+      let outcome: "ok" | "error" = "ok";
+      if (upstreamStatus < 200 || upstreamStatus >= 300) {
+        outcome = "error";
+      } else if (!resp) {
+        outcome = "error";
+      } else if (resp.error !== undefined && resp.error !== null) {
+        outcome = "error";
+      } else if (
+        typeof resp.result === "object" &&
+        resp.result !== null &&
+        (resp.result as Record<string, unknown>).isError === true
+      ) {
+        outcome = "error";
+      }
+
+      recordAudit({
+        user_subject: auth.sub,
+        client_id: auth.client_id,
+        server_id: auth.serverId,
+        kind: "tool_call",
+        tool_name: call.tool,
+        args_summary: summarizeArgs(call.tool, call.args),
+        outcome,
+        status: upstreamStatus,
+        duration_ms,
+      });
+    };
+
+    const processMessage = (msg: unknown) => {
+      if (typeof msg !== "object" || msg === null) return;
+      if (Array.isArray(msg)) {
+        for (const item of msg) {
+          processMessage(item);
+        }
+        return;
+      }
+      const record = msg as Record<string, unknown>;
+      const id = record.id;
+      if (id !== undefined && id !== null) {
+        let matchedKey: string | number | undefined;
+        let matchedCall = pending.get(id as string | number);
+        if (matchedCall) {
+          matchedKey = id as string | number;
+        } else {
+          for (const [key, call] of pending.entries()) {
+            if (String(key) === String(id)) {
+              matchedCall = call;
+              matchedKey = key;
+              break;
+            }
+          }
+        }
+
+        if (matchedCall && matchedKey !== undefined) {
+          pending.delete(matchedKey);
+          recordCall(matchedCall, record as { result?: unknown; error?: unknown });
+        }
+      }
+    };
+
+    const isSse = contentType.toLowerCase().includes("text/event-stream");
+    const reader = auditStream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      if (isSse) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          while (true) {
+            const boundary = findEventBoundary(buffer);
+            if (!boundary) break;
+            const rawEvent = buffer.slice(0, boundary.index);
+            buffer = buffer.slice(boundary.index + boundary.length);
+
+            const parsed = parseSseEventData(rawEvent);
+            if (parsed !== null) {
+              processMessage(parsed);
+            }
+          }
+
+          if (pending.size === 0 && unkeyed.length === 0) {
+            await reader.cancel().catch(() => {});
+            return;
+          }
+        }
+
+        buffer += decoder.decode();
+        while (true) {
+          const boundary = findEventBoundary(buffer);
+          if (!boundary) break;
+          const rawEvent = buffer.slice(0, boundary.index);
+          buffer = buffer.slice(boundary.index + boundary.length);
+          const parsed = parseSseEventData(rawEvent);
+          if (parsed !== null) {
+            processMessage(parsed);
+          }
+        }
+        if (buffer.trim().length > 0) {
+          const parsed = parseSseEventData(buffer);
+          if (parsed !== null) {
+            processMessage(parsed);
+          }
+        }
+      } else {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+        }
+        buffer += decoder.decode();
+
+        try {
+          const parsed = JSON.parse(buffer);
+          processMessage(parsed);
+        } catch {
+          // not valid JSON
+        }
+      }
+    } catch {
+      logger.warn("Failed to process audit stream");
+    } finally {
+      // Record any remaining calls that didn't get a matching response
+      for (const call of pending.values()) {
+        recordCall(call, undefined);
+      }
+      for (const call of unkeyed) {
+        recordCall(call, undefined);
+      }
+    }
+  })().catch(() => {
+    logger.warn("Failed to process audit stream");
   });
 }

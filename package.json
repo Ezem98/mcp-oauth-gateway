@@ -18,7 +18,8 @@
     "mock-upstream": "tsx scripts/mock-upstream.ts",
     "google-mcp": "tsx upstreams/google/server.ts",
     "full-e2e": "tsx scripts/full-e2e.ts",
-    "google-e2e": "tsx scripts/google-e2e.ts"
+    "google-e2e": "tsx scripts/google-e2e.ts",
+    "audit": "tsx scripts/audit.ts"
   },
   "dependencies": {
     "hono": "^4.13.14",

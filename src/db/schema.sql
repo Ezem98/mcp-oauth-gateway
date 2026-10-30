@@ -126,3 +126,19 @@ CREATE TABLE IF NOT EXISTS tool_policies (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (server_id, tool_name)
 );
+
+-- Audit log of gateway actions
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  user_subject TEXT,
+  client_id TEXT,
+  server_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('tool_call','credential_vend','policy_block','connect')),
+  tool_name TEXT,
+  args_summary TEXT,
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok','error','blocked')),
+  status INTEGER,
+  duration_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);

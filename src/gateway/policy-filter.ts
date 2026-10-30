@@ -8,7 +8,15 @@ export interface JsonRpcResponse {
 export type ToolDecisionFn = (toolName: string) => "allow" | "deny";
 
 export interface BlockedToolCall {
+  id?: string | number | null;
   tool: string;
+  args?: unknown;
+}
+
+export interface ForwardedToolCall {
+  id?: string | number | null;
+  tool: string;
+  args?: unknown;
 }
 
 export interface RequestPlan {
@@ -16,6 +24,7 @@ export interface RequestPlan {
   blockedResponses: JsonRpcResponse[];
   toolsListIds: Set<string | number>;
   blockedCalls: BlockedToolCall[];
+  forwardedCalls: ForwardedToolCall[];
 }
 
 function isObject(val: unknown): val is Record<string, unknown> {
@@ -28,6 +37,7 @@ interface InspectedMessage {
   toolsListId?: string | number;
   blockedCall?: BlockedToolCall;
   blockedResponse?: JsonRpcResponse | null;
+  forwardedCall?: ForwardedToolCall;
 }
 
 function inspectMessage(
@@ -47,12 +57,17 @@ function inspectMessage(
       typeof params?.name === "string" && params.name.length > 0
         ? params.name
         : null;
+    const toolArgs = params?.arguments;
 
     const isAllowed = toolName !== null && decide(toolName) === "allow";
 
     if (!isAllowed) {
       const displayName = toolName ?? "(sin nombre)";
-      const blockedCall: BlockedToolCall = { tool: displayName };
+      const blockedCall: BlockedToolCall = {
+        id: hasId ? (msg.id as string | number) : null,
+        tool: displayName,
+        args: toolArgs,
+      };
 
       if (hasId) {
         const blockedResponse: JsonRpcResponse = {
@@ -70,7 +85,13 @@ function inspectMessage(
       return { action: "block", blockedCall, blockedResponse: null };
     }
 
-    return { action: "forward", item: msg };
+    const forwardedCall: ForwardedToolCall = {
+      id: hasId ? (msg.id as string | number) : null,
+      tool: toolName,
+      args: toolArgs,
+    };
+
+    return { action: "forward", item: msg, forwardedCall };
   }
 
   if (method === "tools/list") {
@@ -99,6 +120,7 @@ export function planRequest(
     const blockedResponses: JsonRpcResponse[] = [];
     const toolsListIds = new Set<string | number>();
     const blockedCalls: BlockedToolCall[] = [];
+    const forwardedCalls: ForwardedToolCall[] = [];
 
     for (const item of body) {
       const inspected = inspectMessage(item, decide);
@@ -106,6 +128,9 @@ export function planRequest(
         forwardItems.push(inspected.item);
         if (inspected.toolsListId !== undefined) {
           toolsListIds.add(inspected.toolsListId);
+        }
+        if (inspected.forwardedCall) {
+          forwardedCalls.push(inspected.forwardedCall);
         }
       } else {
         if (inspected.blockedCall) blockedCalls.push(inspected.blockedCall);
@@ -119,6 +144,7 @@ export function planRequest(
       blockedResponses,
       toolsListIds,
       blockedCalls,
+      forwardedCalls,
     };
   }
 
@@ -133,6 +159,7 @@ export function planRequest(
       blockedResponses: [],
       toolsListIds,
       blockedCalls: [],
+      forwardedCalls: inspected.forwardedCall ? [inspected.forwardedCall] : [],
     };
   }
 
@@ -143,6 +170,7 @@ export function planRequest(
       : [],
     toolsListIds: new Set<string | number>(),
     blockedCalls: inspected.blockedCall ? [inspected.blockedCall] : [],
+    forwardedCalls: [],
   };
 }
 
@@ -213,7 +241,7 @@ export function filterJsonBody(
   return text;
 }
 
-function findEventBoundary(buf: string): { index: number; length: number } | null {
+export function findEventBoundary(buf: string): { index: number; length: number } | null {
   const crlf = buf.indexOf("\r\n\r\n");
   const lf = buf.indexOf("\n\n");
   if (crlf === -1 && lf === -1) {
@@ -223,6 +251,44 @@ function findEventBoundary(buf: string): { index: number; length: number } | nul
     return { index: crlf, length: 4 };
   }
   return { index: lf, length: 2 };
+}
+
+/**
+ * Parses JSON data payload from raw SSE event lines.
+ */
+export function parseSseEventData(rawEvent: string): unknown | null {
+  if (rawEvent.trim().length === 0) {
+    return null;
+  }
+
+  const lines = rawEvent.split(/\r?\n/);
+  const dataLines: string[] = [];
+  let hasData = false;
+
+  for (const line of lines) {
+    if (line.startsWith("data:")) {
+      hasData = true;
+      if (line.startsWith("data: ")) {
+        dataLines.push(line.slice(6));
+      } else {
+        dataLines.push(line.slice(5));
+      }
+    } else if (line === "data") {
+      hasData = true;
+      dataLines.push("");
+    }
+  }
+
+  if (!hasData) {
+    return null;
+  }
+
+  const joinedData = dataLines.join("\n");
+  try {
+    return JSON.parse(joinedData);
+  } catch {
+    return null;
+  }
 }
 
 function processSseEvent(

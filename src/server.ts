@@ -12,6 +12,7 @@ import { gatewayRoutes } from "./gateway/route.js";
 import { getActiveSigningKey } from "./oauth/keys.js";
 import { oauthRoutes } from "./oauth/router.js";
 import { logger } from "./observability/logger.js";
+import { purgeOldAudit } from "./audit/audit.js";
 
 function buildApp(): Hono {
   const app = new Hono();
@@ -42,6 +43,10 @@ async function main(): Promise<void> {
 
   // Initialize DB + seed demo server config from env.
   getDb();
+  const purged = purgeOldAudit();
+  if (purged > 0) {
+    logger.info("Purged old audit logs", { count: purged });
+  }
   seedDemoServer();
   seedServersFromFile();
   seedPoliciesFromFile();

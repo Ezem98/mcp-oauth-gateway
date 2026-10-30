@@ -19,6 +19,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { queryAudit } from "../src/audit/audit.js";
 import { getEnv } from "../src/config/env.js";
 import {
   updateCredentialMetadata,
@@ -703,6 +704,82 @@ async function main(): Promise<void> {
             metadata: { stub: true, note: "restored by google-e2e" },
           });
         }
+      }
+    );
+
+    // ─── Step [11] Audit log verification ─────────────────────────────────────
+    await step(
+      "[11] audit log contains expected tool_call, policy_block rows and no leaked secrets",
+      async () => {
+        let rows = queryAudit({ serverId: SERVER_ID, limit: 100 });
+        const start = Date.now();
+        while (Date.now() - start < 3000) {
+          const hasSearch = rows.some(
+            (r) =>
+              r.kind === "tool_call" &&
+              r.tool_name === "gmail_search" &&
+              r.outcome === "ok"
+          );
+          const hasDraft = rows.some(
+            (r) =>
+              r.kind === "tool_call" &&
+              r.tool_name === "gmail_create_draft" &&
+              r.outcome === "ok"
+          );
+          const hasBlocked = rows.some(
+            (r) =>
+              r.kind === "policy_block" &&
+              r.tool_name === "gmail_create_draft" &&
+              r.outcome === "blocked"
+          );
+          if (hasSearch && hasDraft && hasBlocked) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          rows = queryAudit({ serverId: SERVER_ID, limit: 100 });
+        }
+
+        const searchRow = rows.find(
+          (r) =>
+            r.kind === "tool_call" &&
+            r.tool_name === "gmail_search" &&
+            r.outcome === "ok"
+        );
+        assert(searchRow, "expected tool_call row for gmail_search with outcome ok");
+
+        const draftRow = rows.find(
+          (r) =>
+            r.kind === "tool_call" &&
+            r.tool_name === "gmail_create_draft" &&
+            r.outcome === "ok"
+        );
+        assert(draftRow, "expected tool_call row for gmail_create_draft with outcome ok");
+
+        const blockedRow = rows.find(
+          (r) =>
+            r.kind === "policy_block" &&
+            r.tool_name === "gmail_create_draft" &&
+            r.outcome === "blocked"
+        );
+        assert(blockedRow, "expected policy_block row for gmail_create_draft from deny step");
+
+        assert(draftRow.args_summary, "expected args_summary on gmail_create_draft row");
+        assert(
+          draftRow.args_summary.includes("Reunión de mañana"),
+          "expected gmail_create_draft row's args_summary to contain the subject"
+        );
+        assert(
+          !draftRow.args_summary.includes("Confirmado para mañana a las 10."),
+          "gmail_create_draft row's args_summary must not contain draft body text"
+        );
+        assert(
+          !draftRow.args_summary.includes("fake-google-access-token"),
+          "gmail_create_draft row's args_summary must not contain fake-google-access-token"
+        );
+
+        const allRowsJson = JSON.stringify(rows);
+        assert(
+          !allRowsJson.includes("fake-google-access-token"),
+          "no row anywhere contains fake-google-access-token"
+        );
       }
     );
 

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { recordAudit } from "../audit/audit.js";
 import { logger } from "../observability/logger.js";
 import { isValidAdminToken } from "./admin-token.js";
 import {
@@ -147,6 +148,21 @@ connectRoutes.get("/connect/google/callback", async (c) => {
       granted_scopes: grantedScopes,
       connected_at: connectedAt,
     },
+  });
+
+  recordAudit({
+    user_subject: consumed.user_subject,
+    client_id: null,
+    server_id: null,
+    kind: "connect",
+    tool_name: null,
+    args_summary: {
+      provider: "google",
+      granted_scopes: grantedScopes.length,
+      missing_scopes: missingScopes.length,
+    },
+    outcome: "ok",
+    status: 200,
   });
 
   logger.info("Connected Google account", {
