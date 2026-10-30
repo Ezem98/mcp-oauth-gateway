@@ -16,6 +16,7 @@
     "e2e": "tsx scripts/e2e.ts",
     "browser-flow": "tsx scripts/browser-flow.ts",
     "mock-upstream": "tsx scripts/mock-upstream.ts",
+    "google-mcp": "tsx upstreams/google/server.ts",
     "full-e2e": "tsx scripts/full-e2e.ts"
   },
   "dependencies": {
