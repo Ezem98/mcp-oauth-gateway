@@ -1,0 +1,9 @@
+{
+  "google": {
+    "gmail_search": "allow",
+    "gmail_read": "allow",
+    "gmail_create_draft": "allow",
+    "drive_search": "allow",
+    "drive_read": "allow"
+  }
+}

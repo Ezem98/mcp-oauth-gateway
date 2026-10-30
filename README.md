@@ -294,6 +294,10 @@ For the maintainer outreach deck we need a ~2 minute screen capture. Suggested s
 
 Capture with OBS or Loom. Sub-3-minute version is the goal; longer cuts can come later.
 
+## Despliegue
+
+Para desplegar el gateway y el upstream de Google MCP en un entorno de producción con systemd y conectarlo a OpenClaw, consulta la guía paso a paso en [deploy/INSTALL.md](deploy/INSTALL.md).
+
 ## License
 
 TBD — likely Apache-2.0 once the prototype matures.

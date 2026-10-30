@@ -1,45 +1,67 @@
+import type { Context } from "hono";
 import { Hono } from "hono";
+import { recordAudit } from "../audit/audit.js";
 import { bearerAuth } from "../gateway/auth-middleware.js";
 import { logger } from "../observability/logger.js";
-import { getCredential } from "./vault.js";
+import {
+  freshTokenErrorResponse,
+  getFreshGoogleToken,
+} from "./google.js";
+import { getCredential, type VaultCredential } from "./vault.js";
 
 /**
- * Outbound credential vending — Phase 1 sketch.
- *
- *     GET /:server_id/credentials/:provider/token
- *
- * Authenticated with the same Bearer token used for /:server_id/mcp. The
- * `aud` claim ties the call to the same MCP server (RFC 8707), so an MCP
- * server can only vend credentials for users that authorized it.
- *
- * Returns the stub-vaulted access token for the (user, provider) pair.
- * In Phase 1.5 this becomes a real RFC 6749 token endpoint that triggers
- * downstream PKCE flows, refresh, and audit on every call.
+ * Outbound credential vending handler.
  */
-export const credentialsRoutes = new Hono();
-
-credentialsRoutes.use(
-  "/:server_id/credentials/:provider/token",
-  bearerAuth()
-);
-
-credentialsRoutes.get("/:server_id/credentials/:provider/token", (c) => {
+export async function handleVendCredential(c: Context): Promise<Response> {
+  const t0 = Date.now();
   const auth = c.get("auth");
+  const serverId = auth?.serverId ?? c.req.param("server_id");
   const provider = c.req.param("provider");
 
+  const record = (resStatus: number) => {
+    recordAudit({
+      user_subject: auth?.claims?.sub ?? null,
+      client_id: auth?.claims?.client_id ?? null,
+      server_id: serverId ?? null,
+      kind: "credential_vend",
+      tool_name: null,
+      args_summary: { provider: provider ?? null },
+      outcome: resStatus === 200 ? "ok" : "error",
+      status: resStatus,
+      duration_ms: Date.now() - t0,
+    });
+  };
+
   if (!provider) {
+    record(400);
     return c.json({ error: "invalid_request", error_description: "provider required" }, 400);
   }
 
-  const credential = getCredential(auth.claims.sub, provider);
-  if (!credential) {
-    return c.json(
-      {
-        error: "credential_not_found",
-        error_description: `No vaulted credential for user='${auth.claims.sub}' provider='${provider}'`,
-      },
-      404
-    );
+  let credential: VaultCredential | null;
+  if (provider === "google") {
+    try {
+      credential = await getFreshGoogleToken(auth.claims.sub);
+    } catch (err) {
+      const errRes = freshTokenErrorResponse(err, auth.claims.sub);
+      if (!errRes) {
+        record(500);
+        throw err;
+      }
+      record(errRes.status);
+      return c.json(errRes.body, errRes.status);
+    }
+  } else {
+    credential = getCredential(auth.claims.sub, provider);
+    if (!credential) {
+      record(404);
+      return c.json(
+        {
+          error: "credential_not_found",
+          error_description: `No vaulted credential for user='${auth.claims.sub}' provider='${provider}'`,
+        },
+        404
+      );
+    }
   }
 
   // expires_in: seconds from now (best-effort; can be null for non-expiring keys).
@@ -50,19 +72,42 @@ credentialsRoutes.get("/:server_id/credentials/:provider/token", (c) => {
   }
 
   logger.info("Vended downstream credential", {
-    server_id: auth.serverId,
+    server_id: serverId,
     user: auth.claims.sub,
     provider,
     expires_in: expiresIn,
-    stub: credential.metadata?.stub === true,
   });
 
+  record(200);
   return c.json({
     access_token: credential.access_token,
     token_type: credential.credential_type === "oauth2" ? "Bearer" : "ApiKey",
     expires_in: expiresIn,
     scope: credential.scope,
     provider: credential.provider,
-    stub: credential.metadata?.stub === true,
   });
-});
+}
+
+/**
+ * Outbound credential vending.
+ *
+ *     GET /:server_id/credentials/:provider/token
+ *
+ * Authenticated with the same Bearer token used for /:server_id/mcp. The
+ * `aud` claim ties the call to the same MCP server (RFC 8707), so an MCP
+ * server can only vend credentials for users that authorized it.
+ *
+ * For Google, returns a fresh access token, automatically refreshing expired
+ * or expiring tokens. For other providers, returns the vaulted credential.
+ */
+export const credentialsRoutes = new Hono();
+
+credentialsRoutes.use(
+  "/:server_id/credentials/:provider/token",
+  bearerAuth()
+);
+
+credentialsRoutes.get(
+  "/:server_id/credentials/:provider/token",
+  handleVendCredential
+);

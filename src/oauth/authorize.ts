@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { logger } from "../observability/logger.js";
+import { isValidAdminToken } from "../credentials/admin-token.js";
 import { getClient } from "./clients.js";
 import { createAuthCode } from "./codes.js";
 import { getIdentityProvider } from "./identity.js";
+import { redirectUriMatches } from "./redirect-match.js";
 import {
   listServers,
   resolveResourceToServer,
@@ -69,6 +71,7 @@ function renderConsentHtml(opts: {
   userEmail: string;
   resourceLabel: string;
   scopes: string[];
+  errorMessage?: string;
 }): string {
   const hidden = (k: string, v: string | undefined) =>
     v == null
@@ -83,8 +86,12 @@ function renderConsentHtml(opts: {
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
   h1 { font-size: 1.25rem; }
   .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.25rem; }
+  .error { background: #fee2e2; border: 1px solid #ef4444; color: #b91c1c; padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
   .row { margin: 0.75rem 0; font-size: 0.9rem; color: #555; }
   .scopes { background: #f6f8fa; padding: 0.5rem 0.75rem; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+  .field { margin: 1.25rem 0 0; }
+  .field label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; color: #333; }
+  .field input { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.85rem; }
   .actions { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
   button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; font-size: 0.95rem; }
   button.approve { background: #2563eb; color: white; border-color: #2563eb; }
@@ -94,6 +101,11 @@ function renderConsentHtml(opts: {
 <body>
   <h1>Authorize access</h1>
   <div class="card">
+    ${
+      opts.errorMessage
+        ? `<div class="error">${escapeHtml(opts.errorMessage)}</div>`
+        : ""
+    }
     <div class="row"><strong>${escapeHtml(
       opts.clientName ?? opts.params.client_id
     )}</strong> wants to access an MCP server on your behalf.</div>
@@ -101,7 +113,7 @@ function renderConsentHtml(opts: {
     <div class="row">Resource: <code>${escapeHtml(opts.resourceLabel)}</code></div>
     <div class="row">Requested scopes:</div>
     <div class="scopes">${opts.scopes.map(escapeHtml).join(" ")}</div>
-    <form method="post" action="/authorize" class="actions">
+    <form method="post" action="/authorize">
       ${hidden("response_type", opts.params.response_type)}
       ${hidden("client_id", opts.params.client_id)}
       ${hidden("redirect_uri", opts.params.redirect_uri)}
@@ -110,8 +122,14 @@ function renderConsentHtml(opts: {
       ${hidden("scope", opts.scopes.join(" "))}
       ${hidden("state", opts.params.state)}
       ${hidden("resource", opts.params.resource)}
-      <button type="submit" name="decision" value="deny" class="deny">Deny</button>
-      <button type="submit" name="decision" value="approve" class="approve">Approve</button>
+      <div class="field">
+        <label for="admin_token">Token de administrador (el de data/connect-admin.token)</label>
+        <input type="password" id="admin_token" name="admin_token" autocomplete="off">
+      </div>
+      <div class="actions">
+        <button type="submit" name="decision" value="deny" class="deny">Deny</button>
+        <button type="submit" name="decision" value="approve" class="approve">Approve</button>
+      </div>
     </form>
     <div class="note">Demo identity provider — production deployments swap in Google / GitHub / Workforce IdP.</div>
   </div>
@@ -151,7 +169,7 @@ authorizeRoutes.get("/authorize", async (c) => {
     return c.json({ error: "invalid_client" }, 400);
   }
 
-  if (!client.redirect_uris.includes(params.redirect_uri)) {
+  if (!redirectUriMatches(client.redirect_uris, params.redirect_uri)) {
     return c.json(
       { error: "invalid_request", error_description: "redirect_uri not registered" },
       400
@@ -233,7 +251,7 @@ authorizeRoutes.post("/authorize", async (c) => {
   const params = parsed.params;
 
   const client = getClient(params.client_id);
-  if (!client || !client.redirect_uris.includes(params.redirect_uri)) {
+  if (!client || !redirectUriMatches(client.redirect_uris, params.redirect_uri)) {
     return c.json({ error: "invalid_client" }, 400);
   }
 
@@ -243,6 +261,36 @@ authorizeRoutes.post("/authorize", async (c) => {
         error: "access_denied",
         state: params.state,
       })
+    );
+  }
+
+  const adminToken = form.get("admin_token");
+  const adminTokenStr = typeof adminToken === "string" ? adminToken : undefined;
+
+  if (!isValidAdminToken(adminTokenStr)) {
+    const user = await getIdentityProvider().resolveUser();
+    let resourceLabel = params.resource ?? "";
+    if (params.resource) {
+      const server = resolveResourceToServer(params.resource);
+      if (server) {
+        resourceLabel = `${server.server_id} (${params.resource})`;
+      }
+    }
+    const requestedScopes = parseScopeString(
+      params.scope ?? DEFAULT_SCOPE_STRING
+    );
+    const grantedScopes = filterToValidScopes(requestedScopes);
+
+    return c.html(
+      renderConsentHtml({
+        params,
+        clientName: client.client_name,
+        userEmail: user.email ?? user.subject,
+        resourceLabel,
+        scopes: grantedScopes.length > 0 ? grantedScopes : requestedScopes,
+        errorMessage: "Token de administrador inválido",
+      }),
+      401
     );
   }
 

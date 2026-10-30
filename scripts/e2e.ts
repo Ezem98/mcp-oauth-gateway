@@ -14,6 +14,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { getConnectAdminToken } from "../src/credentials/admin-token.js";
 
 const GATEWAY = process.env.GATEWAY ?? "http://localhost:4000";
 const REDIRECT_URI = "http://localhost:9999/callback";
@@ -79,9 +80,8 @@ async function main(): Promise<void> {
   const { verifier, challenge } = makePkce();
   const state = base64url(randomBytes(8));
 
-  // Discover the resource via list of servers — but our server doesn't expose
-  // a list endpoint to clients yet. The demo path: omit `resource`, server
-  // falls back to the single enabled MCP server.
+  // The server doesn't expose a server-list endpoint to clients yet, so the
+  // resource (which MCP server the token is for) is passed explicitly.
   const authQuery = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -90,6 +90,7 @@ async function main(): Promise<void> {
     code_challenge_method: "S256",
     scope: "mcp:read mcp:write",
     state,
+    resource: `${GATEWAY}/${process.env.SERVER_ID ?? "memory-demo"}/mcp`,
   });
 
   console.log("\n[3a] GET /authorize");
@@ -115,6 +116,7 @@ async function main(): Promise<void> {
     form.set("resource", resourceFromConsent);
   }
   form.set("decision", "approve");
+  form.set("admin_token", getConnectAdminToken());
 
   const authPostRes = await fetch(disco.authorization_endpoint, {
     method: "POST",

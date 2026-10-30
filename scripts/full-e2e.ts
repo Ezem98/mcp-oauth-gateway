@@ -15,9 +15,16 @@
  *  3. Full OAuth: discovery → DCR → /authorize approve → /token.
  *  4. Authenticated `initialize`, `tools/list`, `tools/call:echo`,
  *     `tools/call:whoami` all succeed and the upstream sees the right user.
+ *
+ * Note: The script seeds its own stub Google credential into the gateway DB
+ * before running outbound credential vending steps [8] and [9].
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { getEnv } from "../src/config/env.js";
+import { getConnectAdminToken } from "../src/credentials/admin-token.js";
+import { upsertCredential } from "../src/credentials/vault.js";
+import { upsertPolicies } from "../src/policies/policies.js";
 
 const GATEWAY = process.env.GATEWAY ?? "http://localhost:4000";
 const SERVER_ID = process.env.SERVER_ID ?? "memory-demo";
@@ -174,6 +181,7 @@ async function main() {
   // Auto-approve via POST
   const form = new URLSearchParams(authParams);
   form.set("decision", "approve");
+  form.set("admin_token", getConnectAdminToken());
   const authPost = await fetch(disco.authorization_endpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -201,6 +209,28 @@ async function main() {
   );
   const accessToken = tok.access_token as string;
   console.log(`\n▶ Got access token. Proceeding to authenticated MCP calls.`);
+
+  const env = getEnv();
+  upsertCredential({
+    user_subject: env.AUTH_DEFAULT_USER,
+    provider: "google",
+    credential_type: "oauth2",
+    access_token: `e2e-stub-google-token-${randomBytes(8).toString("hex")}`,
+    refresh_token: null,
+    scope: "https://www.googleapis.com/auth/gmail.send",
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    metadata: { stub: true, note: "seeded by full-e2e" },
+  });
+  console.log("▶ Seeded e2e stub Google credential");
+
+  upsertPolicies({
+    [SERVER_ID]: {
+      echo: "allow",
+      whoami: "allow",
+      send_gmail_via_gateway: "allow",
+    },
+  });
+  console.log("▶ Seeded e2e tool policies");
 
   await step("[3] Authenticated initialize", async () => {
     const result = await rpc(
@@ -269,8 +299,8 @@ async function main() {
     );
     const txt = String(result.content?.[0]?.text ?? "");
     assert(
-      txt.includes("stub=true"),
-      `expected stub token marker in output: ${txt}`
+      txt.includes("Got Google token"),
+      `expected report to contain 'Got Google token': ${txt}`
     );
     assert(
       txt.includes("Upstream code did NOT implement OAuth"),
@@ -288,7 +318,15 @@ async function main() {
     assert(res.ok, `vending endpoint returned ${res.status}`);
     const cred = await expectJson(res, "vending");
     assert(cred.access_token, "no access_token in vending response");
-    assert(cred.stub === true, "expected stub=true for seeded demo cred");
+    assert(
+      typeof cred.access_token === "string" &&
+        cred.access_token.startsWith("e2e-stub-google-token-"),
+      `expected access_token to start with 'e2e-stub-google-token-', got ${cred.access_token}`
+    );
+    assert(
+      !("stub" in cred),
+      `expected stub not in cred, got ${JSON.stringify(cred)}`
+    );
     console.log(`     vended: provider=${cred.provider} scope=${cred.scope} expires_in=${cred.expires_in}`);
   });
 

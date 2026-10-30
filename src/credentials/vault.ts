@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { getDb } from "../db/client.js";
-import { logger } from "../observability/logger.js";
+import { decryptSecret, encryptSecret, getVaultKey } from "./crypto.js";
 
 export interface VaultCredential {
   id: string;
@@ -27,13 +27,15 @@ interface VaultRow {
 }
 
 function rowToCredential(row: VaultRow): VaultCredential {
+  const key = getVaultKey();
   return {
     id: row.id,
     user_subject: row.user_subject,
     provider: row.provider,
     credential_type: row.credential_type,
-    access_token: row.access_token,
-    refresh_token: row.refresh_token,
+    access_token: decryptSecret(row.access_token, key),
+    refresh_token:
+      row.refresh_token != null ? decryptSecret(row.refresh_token, key) : null,
     scope: row.scope,
     expires_at: row.expires_at,
     metadata: row.metadata_json
@@ -69,8 +71,21 @@ export interface UpsertCredentialInput {
 }
 
 export function upsertCredential(input: UpsertCredentialInput): VaultCredential {
-  const existing = getCredential(input.user_subject, input.provider);
+  // Look up only the id so a row we can't decrypt (e.g. a legacy plaintext
+  // row, or one written with another key) can still be overwritten.
+  const existing = getDb()
+    .prepare(
+      "SELECT id FROM credential_vault WHERE user_subject = ? AND provider = ?"
+    )
+    .get(input.user_subject, input.provider) as { id: string } | undefined;
   const id = existing?.id ?? nanoid(16);
+  const key = getVaultKey();
+
+  const encryptedAccessToken = encryptSecret(input.access_token, key);
+  const encryptedRefreshToken =
+    input.refresh_token != null
+      ? encryptSecret(input.refresh_token, key)
+      : null;
 
   getDb()
     .prepare(
@@ -92,8 +107,8 @@ export function upsertCredential(input: UpsertCredentialInput): VaultCredential 
       input.user_subject,
       input.provider,
       input.credential_type,
-      input.access_token,
-      input.refresh_token ?? null,
+      encryptedAccessToken,
+      encryptedRefreshToken,
       input.scope ?? null,
       input.expires_at ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null
@@ -103,29 +118,19 @@ export function upsertCredential(input: UpsertCredentialInput): VaultCredential 
 }
 
 /**
- * Seed a stub Google credential for the demo user so the outbound-vending
- * sketch returns something instead of 404. Phase 1.5 replaces this with
- * a real OAuth flow against Google.
+ * Update metadata_json for an existing credential without touching encrypted secrets.
  */
-export function seedDemoCredentials(demoUserSubject: string): void {
-  const existing = getCredential(demoUserSubject, "google");
-  if (existing) return;
-
-  upsertCredential({
-    user_subject: demoUserSubject,
-    provider: "google",
-    credential_type: "oauth2",
-    access_token: `stub-google-token-${nanoid(8)}`,
-    refresh_token: `stub-google-refresh-${nanoid(8)}`,
-    scope: "https://www.googleapis.com/auth/gmail.send",
-    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-    metadata: {
-      note: "Spike stub — not a real Google token. Phase 1.5 replaces this with the real PKCE flow.",
-      stub: true,
-    },
-  });
-
-  logger.info("Seeded stub Google credential for demo user", {
-    user: demoUserSubject,
-  });
+export function updateCredentialMetadata(
+  userSubject: string,
+  provider: string,
+  metadata: Record<string, unknown> | null
+): void {
+  getDb()
+    .prepare(
+      `UPDATE credential_vault
+       SET metadata_json = ?,
+           updated_at = datetime('now')
+       WHERE user_subject = ? AND provider = ?`
+    )
+    .run(metadata ? JSON.stringify(metadata) : null, userSubject, provider);
 }

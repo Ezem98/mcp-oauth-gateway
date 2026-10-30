@@ -104,3 +104,41 @@ CREATE TABLE IF NOT EXISTS credential_vault (
 );
 CREATE INDEX IF NOT EXISTS idx_credential_vault_user_provider
   ON credential_vault(user_subject, provider);
+
+-- Outbound OAuth state tokens pending authorization callback (PKCE)
+CREATE TABLE IF NOT EXISTS outbound_oauth_states (
+  state TEXT PRIMARY KEY,
+  user_subject TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  code_verifier TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_oauth_states_expires_at
+  ON outbound_oauth_states(expires_at);
+
+-- Tool allow/deny policies per MCP server
+CREATE TABLE IF NOT EXISTS tool_policies (
+  server_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (server_id, tool_name)
+);
+
+-- Audit log of gateway actions
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  user_subject TEXT,
+  client_id TEXT,
+  server_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('tool_call','credential_vend','policy_block','connect')),
+  tool_name TEXT,
+  args_summary TEXT,
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok','error','blocked')),
+  status INTEGER,
+  duration_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);

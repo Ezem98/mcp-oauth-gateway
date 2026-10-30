@@ -1,0 +1,8 @@
+[
+  {
+    "server_id": "google",
+    "display_name": "Google (Gmail + Drive)",
+    "upstream_url": "http://127.0.0.1:5002/mcp",
+    "upstream_auth_header": "X-Google-MCP-Secret: CHANGE_ME_SAME_AS_GOOGLE_MCP_SHARED_SECRET"
+  }
+]

@@ -1,13 +1,18 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { getEnv } from "./config/env.js";
-import { seedDemoCredentials } from "./credentials/vault.js";
+import { connectRoutes } from "./credentials/connect-route.js";
+import { getConnectAdminToken } from "./credentials/admin-token.js";
+import { getVaultKey } from "./credentials/crypto.js";
 import { credentialsRoutes } from "./credentials/route.js";
 import { getDb, seedDemoServer } from "./db/client.js";
+import { seedServersFromFile } from "./db/servers-file.js";
+import { seedPoliciesFromFile } from "./policies/policies.js";
 import { gatewayRoutes } from "./gateway/route.js";
 import { getActiveSigningKey } from "./oauth/keys.js";
 import { oauthRoutes } from "./oauth/router.js";
 import { logger } from "./observability/logger.js";
+import { purgeOldAudit } from "./audit/audit.js";
 
 function buildApp(): Hono {
   const app = new Hono();
@@ -21,6 +26,7 @@ function buildApp(): Hono {
 
   app.route("/", oauthRoutes);
   app.route("/", credentialsRoutes);
+  app.route("/", connectRoutes);
   app.route("/", gatewayRoutes);
 
   app.notFound((c) => c.json({ error: "not_found", path: c.req.path }, 404));
@@ -37,8 +43,17 @@ async function main(): Promise<void> {
 
   // Initialize DB + seed demo server config from env.
   getDb();
+  const purged = purgeOldAudit();
+  if (purged > 0) {
+    logger.info("Purged old audit logs", { count: purged });
+  }
   seedDemoServer();
-  seedDemoCredentials(env.AUTH_DEFAULT_USER);
+  seedServersFromFile();
+  seedPoliciesFromFile();
+
+  // Load (or create) the vault key up front so a bad key file fails at boot.
+  getVaultKey();
+  getConnectAdminToken();
 
   // Materialize the active signing keypair (generates on first run).
   await getActiveSigningKey();
@@ -46,7 +61,7 @@ async function main(): Promise<void> {
   const app = buildApp();
 
   serve(
-    { fetch: app.fetch, port: env.PORT },
+    { fetch: app.fetch, port: env.PORT, hostname: env.LISTEN_HOST },
     () => {
       logger.info(`HTTP listening`, { url: env.PUBLIC_URL });
       logger.info("Endpoints:");
@@ -59,6 +74,8 @@ async function main(): Promise<void> {
       logger.info("  POST /token");
       logger.info("  GET  /.well-known/oauth-protected-resource/:server_id/mcp");
       logger.info("  GET  /:server_id/credentials/:provider/token (outbound vending, auth required)");
+      logger.info("  GET  /connect/google");
+      logger.info("  GET  /connect/google/callback");
       logger.info("  ANY  /:server_id/mcp                       (proxied, auth required)");
     }
   );

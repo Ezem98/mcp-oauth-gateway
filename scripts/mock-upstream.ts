@@ -45,7 +45,6 @@ async function fetchDownstreamToken(
   token_type: string;
   expires_in: number | null;
   scope: string | null;
-  stub?: boolean;
 }> {
   const url = `${ctx.gatewayUrl}/${ctx.serverId}/credentials/${provider}/token`;
   const res = await fetch(url, {
@@ -62,7 +61,6 @@ async function fetchDownstreamToken(
     token_type: string;
     expires_in: number | null;
     scope: string | null;
-    stub?: boolean;
   };
 }
 
@@ -151,7 +149,7 @@ async function handle(
               {
                 type: "text",
                 text:
-                  `[mock] Got Google token (stub=${cred.stub ?? false}, scope=${cred.scope}). ` +
+                  `[mock] Got Google token (scope=${cred.scope}). ` +
                   `Would send email: to='${to}' subject='${subject}' body='${body.slice(0, 60)}…'. ` +
                   `Upstream code did NOT implement OAuth — gateway vended the credential.`,
               },
