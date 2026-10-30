@@ -38,11 +38,11 @@ Clonar el repositorio en `/opt/mcp-oauth-gateway`, asignar permisos al usuario `
 sudo git clone https://github.com/Ezem98/mcp-oauth-gateway /opt/mcp-oauth-gateway
 cd /opt/mcp-oauth-gateway
 
-# Mientras todo esto viva en la rama jarvis (hay que pushearla antes):
-sudo git checkout jarvis
 
 sudo chown -R mcpgw:mcpgw /opt/mcp-oauth-gateway
-sudo -u mcpgw npm ci --omit=dev
+# mcpgw no tiene home: la caché de npm va a /tmp y se borra después
+sudo -u mcpgw env npm_config_cache=/tmp/mcpgw-npm-cache npm ci --omit=dev
+sudo rm -rf /tmp/mcpgw-npm-cache
 sudo -u mcpgw mkdir -p /opt/mcp-oauth-gateway/data
 sudo -u mcpgw chmod 700 /opt/mcp-oauth-gateway/data
 ```
@@ -222,15 +222,21 @@ Todos los comandos de esta sección se corren **como `jarvis`**, en una sesión 
 
 ### Paso 8.2: Iniciar el inicio de sesión OAuth
 
-Ejecutar en el servidor:
+OpenClaw recibe el callback de OAuth en `http://127.0.0.1:8989/oauth/callback` **del servidor**. Si ese puerto también viaja por el túnel, el navegador de tu PC se lo entrega directo y no hay que copiar ningún código a mano. En tu PC, abrí el túnel con los dos puertos (y dejalo abierto):
+
+```bash
+ssh -L 4000:127.0.0.1:4000 -L 8989:127.0.0.1:8989 minecraft@mc-server
+```
+
+Ejecutar en el servidor, como `jarvis`, y **no cortarlo con Ctrl+C** (queda esperando el navegador):
 
 ```bash
 ~/.npm-global/bin/openclaw mcp login google
 ```
 
-1. OpenClaw iniciará un servidor local efímero en un puerto loopback aleatorio e imprimirá en consola una URL de autorización:
+1. OpenClaw imprime una URL de autorización:
    `http://localhost:4000/authorize?response_type=code&client_id=...`
-2. Con el túnel SSH abierto (`ssh -L 4000:127.0.0.1:4000`), abrir la URL impresa en el navegador de tu PC local.
+2. Abrir esa URL en el navegador de tu PC.
 3. Aparecerá la pantalla de autorización del gateway solicitando el **Token de administrador**.
    Para consultar el token en el servidor, ejecutar:
    ```bash
@@ -239,20 +245,14 @@ Ejecutar en el servidor:
    > [!CAUTION]
    > Este token otorga privilegios de administrador para aprobar clientes OAuth y vincular credenciales en el gateway. **No lo pegues en ningún otro sitio** ni lo compartas en registros públicos o chats.
 4. Pegar el token en el campo del formulario y hacer clic en **Approve**.
-5. Tras aprobar, el navegador intentará redirigir a `http://127.0.0.1:<puerto_aleatorio>/callback?code=<codigo_auth>&state=...` en tu PC local. Como el listener efímero de OpenClaw se encuentra escuchando en el servidor y no en tu máquina local, el navegador mostrará un fallo de conexión (*ERR_CONNECTION_REFUSED*). **Esto es completamente normal y esperado**.
-6. Copiar el valor del parámetro `code` que aparece en la barra de direcciones del navegador.
-   > [!IMPORTANT]
-   > El código vence a los **60 segundos** y sirve una sola vez. Tené abierta de antemano la sesión como `jarvis` para pegarlo enseguida; si vence, repetí `mcp login google`.
-7. En el servidor, completar el login entregándole el código a OpenClaw:
-   ```bash
-   ~/.npm-global/bin/openclaw mcp login google --code <codigo_copiado>
-   ```
-8. Verificar la conexión con el comando probe:
+5. El navegador vuelve a `http://127.0.0.1:8989/oauth/callback?...`, el túnel lo lleva al servidor y `openclaw mcp login` termina solo.
+6. **Plan B** (si abriste el túnel sin `-L 8989:...`): el navegador muestra *ERR_CONNECTION_REFUSED*. Copiá el parámetro `code` de la barra de direcciones y corré `~/.npm-global/bin/openclaw mcp login google --code <code>`. El código vence a los **60 segundos** y sirve una sola vez; si ves "The CLI command failed", lo más probable es que haya vencido: repetí desde `mcp login google`.
+7. Verificar la conexión con el comando probe:
    ```bash
    ~/.npm-global/bin/openclaw mcp probe google
    ```
    Debe listar las 5 herramientas autorizadas (`gmail_search`, `gmail_read`, `gmail_create_draft`, `drive_search`, `drive_read`).
-9. Recargar OpenClaw para aplicar la nueva configuración:
+8. Recargar OpenClaw para aplicar la nueva configuración:
    ```bash
    ~/.npm-global/bin/openclaw mcp reload
    ```
@@ -353,8 +353,10 @@ Para actualizar la aplicación a una versión más reciente:
 
 ```bash
 cd /opt/mcp-oauth-gateway
-sudo -u mcpgw git pull
-sudo -u mcpgw npm ci --omit=dev
+sudo -u mcpgw git pull --ff-only
+# mcpgw no tiene home: la caché de npm va a /tmp y se borra después
+sudo -u mcpgw env npm_config_cache=/tmp/mcpgw-npm-cache npm ci --omit=dev
+sudo rm -rf /tmp/mcpgw-npm-cache
 sudo systemctl restart google-mcp mcp-gateway
 ```
 
