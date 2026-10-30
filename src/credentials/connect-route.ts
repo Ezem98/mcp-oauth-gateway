@@ -142,6 +142,7 @@ connectRoutes.get("/connect/google/callback", async (c) => {
     scope: tokenResponse.scope,
     expires_at: expiresAt,
     metadata: {
+      // Replaces metadata wholesale, clearing needs_reconnect if previously set
       token_type: tokenResponse.token_type,
       granted_scopes: grantedScopes,
       connected_at: connectedAt,

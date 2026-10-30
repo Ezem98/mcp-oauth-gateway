@@ -287,8 +287,8 @@ async function main() {
     );
     const txt = String(result.content?.[0]?.text ?? "");
     assert(
-      txt.includes("stub=true"),
-      `expected stub token marker in output: ${txt}`
+      txt.includes("Got Google token"),
+      `expected report to contain 'Got Google token': ${txt}`
     );
     assert(
       txt.includes("Upstream code did NOT implement OAuth"),
@@ -306,7 +306,15 @@ async function main() {
     assert(res.ok, `vending endpoint returned ${res.status}`);
     const cred = await expectJson(res, "vending");
     assert(cred.access_token, "no access_token in vending response");
-    assert(cred.stub === true, "expected stub=true for seeded demo cred");
+    assert(
+      typeof cred.access_token === "string" &&
+        cred.access_token.startsWith("e2e-stub-google-token-"),
+      `expected access_token to start with 'e2e-stub-google-token-', got ${cred.access_token}`
+    );
+    assert(
+      !("stub" in cred),
+      `expected stub not in cred, got ${JSON.stringify(cred)}`
+    );
     console.log(`     vended: provider=${cred.provider} scope=${cred.scope} expires_in=${cred.expires_in}`);
   });
 

@@ -1,10 +1,14 @@
 import { Hono } from "hono";
 import { bearerAuth } from "../gateway/auth-middleware.js";
 import { logger } from "../observability/logger.js";
-import { getCredential } from "./vault.js";
+import {
+  freshTokenErrorResponse,
+  getFreshGoogleToken,
+} from "./google.js";
+import { getCredential, type VaultCredential } from "./vault.js";
 
 /**
- * Outbound credential vending — Phase 1 sketch.
+ * Outbound credential vending.
  *
  *     GET /:server_id/credentials/:provider/token
  *
@@ -12,9 +16,8 @@ import { getCredential } from "./vault.js";
  * `aud` claim ties the call to the same MCP server (RFC 8707), so an MCP
  * server can only vend credentials for users that authorized it.
  *
- * Returns the stub-vaulted access token for the (user, provider) pair.
- * In Phase 1.5 this becomes a real RFC 6749 token endpoint that triggers
- * downstream PKCE flows, refresh, and audit on every call.
+ * For Google, returns a fresh access token, automatically refreshing expired
+ * or expiring tokens. For other providers, returns the vaulted credential.
  */
 export const credentialsRoutes = new Hono();
 
@@ -23,7 +26,7 @@ credentialsRoutes.use(
   bearerAuth()
 );
 
-credentialsRoutes.get("/:server_id/credentials/:provider/token", (c) => {
+credentialsRoutes.get("/:server_id/credentials/:provider/token", async (c) => {
   const auth = c.get("auth");
   const provider = c.req.param("provider");
 
@@ -31,15 +34,28 @@ credentialsRoutes.get("/:server_id/credentials/:provider/token", (c) => {
     return c.json({ error: "invalid_request", error_description: "provider required" }, 400);
   }
 
-  const credential = getCredential(auth.claims.sub, provider);
-  if (!credential) {
-    return c.json(
-      {
-        error: "credential_not_found",
-        error_description: `No vaulted credential for user='${auth.claims.sub}' provider='${provider}'`,
-      },
-      404
-    );
+  let credential: VaultCredential | null;
+  if (provider === "google") {
+    try {
+      credential = await getFreshGoogleToken(auth.claims.sub);
+    } catch (err) {
+      const errRes = freshTokenErrorResponse(err, auth.claims.sub);
+      if (!errRes) {
+        throw err;
+      }
+      return c.json(errRes.body, errRes.status);
+    }
+  } else {
+    credential = getCredential(auth.claims.sub, provider);
+    if (!credential) {
+      return c.json(
+        {
+          error: "credential_not_found",
+          error_description: `No vaulted credential for user='${auth.claims.sub}' provider='${provider}'`,
+        },
+        404
+      );
+    }
   }
 
   // expires_in: seconds from now (best-effort; can be null for non-expiring keys).
@@ -54,7 +70,6 @@ credentialsRoutes.get("/:server_id/credentials/:provider/token", (c) => {
     user: auth.claims.sub,
     provider,
     expires_in: expiresIn,
-    stub: credential.metadata?.stub === true,
   });
 
   return c.json({
@@ -63,6 +78,5 @@ credentialsRoutes.get("/:server_id/credentials/:provider/token", (c) => {
     expires_in: expiresIn,
     scope: credential.scope,
     provider: credential.provider,
-    stub: credential.metadata?.stub === true,
   });
 });

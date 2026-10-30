@@ -116,3 +116,21 @@ export function upsertCredential(input: UpsertCredentialInput): VaultCredential 
 
   return getCredential(input.user_subject, input.provider)!;
 }
+
+/**
+ * Update metadata_json for an existing credential without touching encrypted secrets.
+ */
+export function updateCredentialMetadata(
+  userSubject: string,
+  provider: string,
+  metadata: Record<string, unknown> | null
+): void {
+  getDb()
+    .prepare(
+      `UPDATE credential_vault
+       SET metadata_json = ?,
+           updated_at = datetime('now')
+       WHERE user_subject = ? AND provider = ?`
+    )
+    .run(metadata ? JSON.stringify(metadata) : null, userSubject, provider);
+}
